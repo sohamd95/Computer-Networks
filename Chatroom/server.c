@@ -8,6 +8,8 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <signal.h>
+#include <unistd.h>
+#include <arpa/inet.h>
 
 #define MAX_CLIENTS 8
 #define MAX_MSGSIZ 128
@@ -16,7 +18,7 @@
 typedef void (*sighandler_t)(int);
 
 struct client {
-	
+
 	int id;
 	int sfd;
 	char name[64];
@@ -27,6 +29,8 @@ struct client {
 struct client *clients[MAX_CLIENTS];
 int numClients, maxFd, sfd;
 pthread_mutex_t mutex;
+pthread_cond_t connectorWaiting;
+int connectorWaitingBool;
 sighandler_t old_handler;
 
 void* connector(void* junk) {
@@ -53,7 +57,7 @@ void* connector(void* junk) {
 
 		//Block till client arrives (accept())
 		printf("\nWaiting for client...\n");
-		
+
 		struct sockaddr_in client_addr;
 		socklen_t nbytes = sizeof client_addr;
 		int nsfd = accept(sfd, (struct sockaddr *) &client_addr, &nbytes);
@@ -72,7 +76,9 @@ void* connector(void* junk) {
 
 		printf("Client Arrived. Stream opened\n");
 
+		connectorWaitingBool = 1;
 		pthread_mutex_lock(&mutex);
+		connectorWaitingBool = 0;
 
 		int id = 0;
 		while(clients[id] != NULL && id < MAX_CLIENTS) id++;
@@ -98,6 +104,7 @@ void* connector(void* junk) {
 		if(nsfd > maxFd) maxFd = nsfd;
 		numClients++;
 
+		pthread_cond_broadcast(&connectorWaiting);
 		pthread_mutex_unlock(&mutex);
 
 		int j;
@@ -162,8 +169,12 @@ void* msgHandlerFunc(void *junk) {
 
 		//Lock clients array to prevent connectionMngr thread from modifying it
 		pthread_mutex_lock(&mutex);
-		//Wait for a client to send something
 
+		//Check if Connection Manager thread is waiting for access to clients array. If yes; give priority to connectionMngr.
+		//This is to ensure that a new client will not be kept waiting to connect for a long time
+		while(connectorWaitingBool) pthread_cond_wait(&connectorWaiting, &mutex);
+
+		//Wait for a client to send something
 		//Reset fdset
 		FD_ZERO(&fds);
 		tv.tv_sec = 0;
@@ -174,20 +185,23 @@ void* msgHandlerFunc(void *junk) {
 			}
 		}
 
+		//Check sockets for readable data
 		int n = select(maxFd+1, &fds, NULL, NULL, &tv);
 
-		if(n == 0) {
+		if(n == 0) { //No readable data on any socket
+			pthread_cond_broadcast(&connectorWaiting);
 			pthread_mutex_unlock(&mutex);
 			continue;
 		}
 
-		if(n == -1) {
+		if(n == -1) { //Error
 			perror("select(fds)");
 			exit(-1);
 		}
 
-		for(i=0 ; i<MAX_CLIENTS ; i++) {
-			if(clients[i] != NULL && FD_ISSET(clients[i]->sfd, &fds)) {
+		//Found readable data on one or more sockets
+		for(i=0 ; i<MAX_CLIENTS ; i++) { //Iterate over all sockets
+			if(clients[i] != NULL && FD_ISSET(clients[i]->sfd, &fds)) { //Check if this socket has readable data
 
 				int nbytes = recv(clients[i]->sfd, buffer, MAX_MSGSIZ, 0);
 				buffer[nbytes] = '\0';
@@ -209,6 +223,7 @@ void* msgHandlerFunc(void *junk) {
 			}
 		}
 		//Unlock fd array
+		pthread_cond_broadcast(&connectorWaiting);
 		pthread_mutex_unlock(&mutex);
 	}
 
@@ -251,7 +266,9 @@ int main(int argc, char *argv[]) {
 	old_handler = signal(SIGINT, closeConnections);
 	pthread_t connectionMngr, msgHandler;
 
+	connectorWaitingBool = 0;
 	pthread_mutex_init(&mutex, NULL);
+	pthread_cond_init(&connectorWaiting, NULL);
 	pthread_create(&connectionMngr, NULL, connector, NULL);
 	pthread_create(&msgHandler, NULL, msgHandlerFunc, NULL);
 

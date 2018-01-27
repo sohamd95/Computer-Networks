@@ -7,6 +7,7 @@
 #include <pthread.h>
 #include <netinet/in.h>
 #include <readline/readline.h>
+#include <arpa/inet.h>
 
 #define SERVER_PORTAL "/tmp/chat_server"
 #define ERR_FULL "ERR1"
@@ -77,12 +78,19 @@ void *receiver(void *junk) {
 		if(nbytes == 0) {
 			printf("\033[1A\033[K\nConnection to server lost!\n");
 			connected = 0;
-			break;
+			raise(SIGINT);
 		}
-		
+
 		printf("\r\033[K%s\x1b[36;1m[%s]:\x1b[0m ", buffer, name);
 	}
 
+}
+
+int isEmpty(char* string) {
+	int i = 0;
+	while(string[i] != '\0')
+		if(isalnum(string[i++])) return 0;
+	return 1;
 }
 
 void *sender(void *junk) {
@@ -103,13 +111,6 @@ void *sender(void *junk) {
 			// printf("Sent!\n");
 		} else printf("\033[1A\033[K");
 	}
-}
-
-int isEmpty(char* string) {
-	int i = 0;
-	while(string[i] != '\0')
-		if(isalnum(string[i++])) return 0;
-	return 1;
 }
 
 int main() {
