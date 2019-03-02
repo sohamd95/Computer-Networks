@@ -20,7 +20,7 @@ Start the server first -
 ```
 ./server.out
 ```
-The server will run on port ```12345```. If you'd like to change that, you'll have to change it in the source code and recompile. (Not the best coding practice; I know)
+The server will run on port ```12345```. If you'd like to change that, you'll have to change it in the source code and recompile. ¯\_(ツ)_/¯
 
 
 Then, in a new terminal window,
